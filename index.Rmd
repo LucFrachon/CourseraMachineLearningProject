@@ -53,16 +53,21 @@ for (c in names(colSelect)) {
 }
 # We get rid of the problematic and incomplete cvtd_timestamp variable
 # and reconstruct our data set:
-fullSet <- data.frame(select(rawData, (X : raw_timestamp_part_2), new_window,
-                      num_window), colSelect,
+fullSet <- data.frame(select(rawData, (X : raw_timestamp_part_2),
+                             new_window, num_window), colSelect, 
                       classe = as.factor(rawData$classe))
+rm(rawData)
+rm(colSelect)
 ```
 
 The data comes is kindly made available from the team cited in References. It contains 19622 observations and 160 variables, 153 of which can be considered potential predictors. The outcome is 'classe', a categorical variable with 5 classes; A corresponds to correctly executed movement whereas B through E denote specific errors in execution.  
 Exploratory analysis shows that the dataset is ordered by 'classe', then 'user_name', then 'num_window', then timestamps (*figure 1*). 
 
 ```{r echo= FALSE, fig.cap="*Figure 1: Structure of the raw dataset. Different colours indicate different human users.*", include=TRUE}
-plot(fullSet$X, fullSet$num_window, pch = as.character(fullSet$classe), col = fullSet$user_name, xlab = "Row index", ylab = "num_window")
+plot(fullSet$X, fullSet$num_window, 
+     pch = as.character(fullSet$classe), 
+     col = fullSet$user_name, xlab = "Row index", 
+     ylab = "num_window")
 ```
 
 
@@ -76,7 +81,9 @@ The timestamps correspond to  2.5s intervals with a 0.5s overlap. Presumably, ea
 
 The data contains many sparse columns; it is really an "all-or-nothing" situation: the majority of columns are empty or near-empty.
 ```{r echo = FALSE}
-NAsByCol <- sapply(names(fullSet), function(c){sum(is.na(fullSet[, c])) / length(fullSet[, c])})
+NAsByCol <- sapply(names(fullSet), 
+                   function(c){sum(is.na(fullSet[, c])) /
+                           length(fullSet[, c])})
 ```
 
 ```{r echo = FALSE, fig.cap="*Figure 2: Distribution of the proportion of NAs in each column*", include = TRUE}
@@ -87,9 +94,9 @@ We address this by setting a threshold at 50% and dropping any column containing
 
 ```{r}
 thresh <- .50
-fullSetNoNAs<- fullSet[ , colSums(is.na(fullSet))
-                        <= thresh * length(fullSet[[1]])]
-
+fullSetNoNAs<- fullSet[ , colSums(is.na(fullSet)) <= 
+                            thresh * length(fullSet[[1]])]
+rm(fullSet)
 # Check how the number of NAs dropped:
 sum(is.na(fullSetNoNAs))
 sum(is.na(fullSetNoNAs)) / (ncol(fullSetNoNAs) * nrow(fullSetNoNAs))
@@ -109,12 +116,14 @@ We have a large number of observations, therefore we can afford to partition the
 * Test set (20%), on which to estimate the model's quality. A small sample of 20 test cases is also provided by Coursera, but that number is too small for a reliable assessment.
 
 ```{r}
-trainIndex <- createDataPartition(fullSetNoNAs$classe, p = 0.6, list = F)
+trainIndex <- createDataPartition(fullSetNoNAs$classe, 
+                                  p = 0.6, list = F)
 train1 <- fullSetNoNAs[trainIndex, ]
 test1 <- fullSetNoNAs[-trainIndex, ]
 cvIndex <- createDataPartition(test1$classe, p = 0.5, list = F)
 cv1 <- test1[cvIndex, ]
 test1 <- test1[-cvIndex, ]
+rm(fullSetNoNAs)
 ```
 
 # 4. Model Fitting and Prediction
@@ -139,15 +148,16 @@ We will now focus on the Random Forest algorithm, which yielded the best results
 ## 4.2. Random Forest on untransformed data
 We first deploy the Random Forest algorithm on the training set without prior transformation, using the 'caret' package:
 
-```{r message=FALSE, warning=FALSE, cache = TRUE, eval=FALSE}
-forestFit <- train(classe ~ ., method = "rf", data = train1[, 7:59], prox = T, trControl = fitControl)
+```{r message=FALSE, warning=FALSE, cache=TRUE, eval=TRUE}
+forestFit <- train(classe ~ ., method = "rf", data = train1[, 7:59],
+                   prox = T, trControl = fitControl)
 forestPred <- predict(forestFit, newdata = train1[, 7:59])
 ```
 
 For Random Forest, calculating accuracy by predicting on the training set is incorrect. A better measure of training accuracy is the OOB prediction error. Here, it is `r forestFit$OOB`.
 Accuracy on the cross-validation set is also excellent:
 
-```{r}
+```{r cache=TRUE}
 forestCvPred <- predict(forestFit, newdata = cv1[, 7:59])
 sum(forestCvPred == cv1[, 59]) / length(forestCvPred)
 table(Actual = cv1[, 59], Prediction = forestCvPred)
@@ -165,7 +175,7 @@ The RF algorithm includes bootstrapping which theoretically reduces the need for
 
 We rely on the 'train' function to find the optimal number of tries for the Random Forest Algorithm, while we manually vary the PCA threshold (proportion of variance explained by the computed Principal Components)
 
-```{r}
+```{r cache=TRUE}
 PCA.thresh <- c(0.95, 0.9, 0.8, 0.8, 0.5)
 
 accuraciesWithPCA <- function(t, outcome, model, trainData, cvData,
@@ -185,7 +195,8 @@ accuraciesWithPCA <- function(t, outcome, model, trainData, cvData,
     # Calculate predictions for the CV dataset based on those PCs:
     cvDataPCA <- predict(pcaModel, cvData.PCAselection)
     cvPredPCA <- predict(modelFitPCA, newdata = cvDataPCA)
-    results[1] <- sum(cvPredPCA == cvData[[outcome]]) / length(cvPredPCA)
+    results[1] <- sum(cvPredPCA == cvData[[outcome]]) 
+                    / length(cvPredPCA)
     results[2] <- modelFitPCA
     return(results)
 }
