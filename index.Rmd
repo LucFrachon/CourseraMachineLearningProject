@@ -2,21 +2,206 @@
 title: 'Practical Machine Learning Project: Human Activity Qualification'
 author: "Luc Frachon"
 date: "21 janvier 2016"
-output: html_document
+output: 
+  html_document: 
+    keep_md: yes
+    fig_caption: yes
 ---
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+# Abstract
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Using data collected through accelerometers worn by a group of people performing weight lifting, we fit classification algorithms to the data to predict whether the exercise was performed correcty or with different types of typical errors.  
+After trying several models and parameters, we conclude that the best compromise between absolute performance and speed is provided by a Random Forest algorithm applied to data dimensionally reduced through PCA.
+
+---
+
+
+# 1. Set up and data preparation
+
+This analysis was performed using the following set up: 
+
+*  Computer: Intel i5-4440 with 8GB RAM, solid-state main hard drive
+*  OS: Windows 10, build number 10586
+*  R version 3.2.2
+*  RStudio version 0.99.484
+*  Locale = French_France.1252
+
+In this analysis we use the following libraries: caret, ggplot2, dplyr, parallel and doParallel. These last two enable us to take advantage of the quad-core configuration to speed up calculations. We also set the randomiser seed to 2302.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+require(caret); require(ggplot2); require(dplyr); require(reshape2); require(rpart)
+
+#Increase memory allocation and set up parallel computing:
+memory.limit(16194)
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(allowParallel = TRUE)
+set.seed(2302)
+```
+
+As usual, we read the data and tidy it up to make it easier to use.
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+rawData <- read.csv("data/pml-training.csv",
+                    na.strings = c("", "NA", "#DIV/0!"))
+# Some variables improperly loaded as factors or integer vectors:
+colSelect <- select(rawData, -(X : cvtd_timestamp), -new_window,
+                    -num_window, -classe)
+for (c in names(colSelect)) {
+    colSelect[, c] <- as.numeric(colSelect[, c])
+}
+# We get rid of the problematic and incomplete cvtd_timestamp variable
+# and reconstruct our data set:
+fullSet <- data.frame(select(rawData, (X : raw_timestamp_part_2), new_window,
+                      num_window), colSelect,
+                      classe = as.factor(rawData$classe))
+```
+
+The data comes is kindly made available from the team cited in References. It contains 19622 observations and 160 variables, 153 of which can be considered potential predictors. The outcome is 'classe', a categorical variable with 5 classes; A corresponds to correctly executed movement whereas B through E denote specific errors in execution.  
+Exploratory analysis shows that the dataset is ordered by 'classe', then 'user_name', then 'num_window', then timestamps (*figure 1*). 
+
+```{r echo= FALSE, fig.cap="*Figure 1: Structure of the raw dataset. Different colours indicate different human users.*", include=TRUE}
+plot(fullSet$X, fullSet$num_window, pch = as.character(fullSet$classe), col = fullSet$user_name, xlab = "Row index", ylab = "num_window")
+```
+
+
+The timestamps correspond to  2.5s intervals with a 0.5s overlap. Presumably, each window corresponds to one instance of weight lifting. We considered the possibility of grouping observations within each window and using aggregated statistics as predictors. Although this approach might have made training and prediction easier, we decided against it for three reasons:
+
+* The research team had already tried different time aggregatesand decided that 2.5s gave the best results; it seemed somewhat superfluous to use a second layer of aggregation.
+* In real life, there is no cue from the user to let the sensors know when they start and stop an activity, therefore relevant algorithms need to be able to predict without that information.
+* We came up with excellent predictive performance without the need for this aggregation.
+
+# 2. Pre-processing
+
+The data contains many sparse columns; it is really an "all-or-nothing" situation: the majority of columns are empty or near-empty.
+```{r echo = FALSE}
+NAsByCol <- sapply(names(fullSet), function(c){sum(is.na(fullSet[, c])) / length(fullSet[, c])})
+```
+
+```{r echo = FALSE, fig.cap="*Figure 2: Distribution of the proportion of NAs in each column*", include = TRUE}
+hist(NAsByCol, breaks = 50, col = "lightgrey", main = NULL)
+```
+
+We address this by setting a threshold at 50% and dropping any column containing more than NAs the threshold. This effectively drops all the NAs. There are no other zero- or near-zero variance predictors.
 
 ```{r}
-summary(cars)
+thresh <- .50
+fullSetNoNAs<- fullSet[ , colSums(is.na(fullSet))
+                        <= thresh * length(fullSet[[1]])]
+
+# Check how the number of NAs dropped:
+sum(is.na(fullSetNoNAs))
+sum(is.na(fullSetNoNAs)) / (ncol(fullSetNoNAs) * nrow(fullSetNoNAs))
 ```
 
-You can also embed plots, for example:
-
-```{r, echo=FALSE}
-plot(cars)
+```{r}
+# There are no other zero or near-zero variance predictors:
+nearZeroVar(fullSetNoNAs[ , 7 : 58], freqCut = 95/5, saveMetrics = FALSE)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# 3. Data Partitioning
+
+We have a large number of observations, therefore we can afford to partition the data in 3:
+
+* Training set (60%)
+* Cross-validation set (20%), which we will use to select and tune the best algorithm
+* Test set (20%), on which to estimate the model's quality. A small sample of 20 test cases is also provided by Coursera, but that number is too small for a reliable assessment.
+
+```{r}
+trainIndex <- createDataPartition(fullSetNoNAs$classe, p = 0.6, list = F)
+train1 <- fullSetNoNAs[trainIndex, ]
+test1 <- fullSetNoNAs[-trainIndex, ]
+cvIndex <- createDataPartition(test1$classe, p = 0.5, list = F)
+cv1 <- test1[cvIndex, ]
+test1 <- test1[-cvIndex, ]
+```
+
+# 4. Model Fitting and Prediction
+## 4.1. Algorithm selection
+We tried several algorithms, starting with simple ones:
+
+* Decision tree
+* Linear Discriminant Analysis
+* Naive Bayes
+* Random Forest
+
+The first three gave unsatisfactory prediction accuracy both on the training and cross-validation sets:
+
+Model       | Accuracy on CV set
+--------------------------------
+Tree        | 49.6%
+LDA         | 70.6%
+Naive-Bayes | 74.6%    
+
+We will now focus on the Random Forest algorithm, which yielded the best results by far.
+
+## 4.2. Random Forest on untransformed data
+We first deploy the Random Forest algorithm on the training set without prior transformation, using the 'caret' package:
+
+```{r message=FALSE, warning=FALSE, cache = TRUE, eval=FALSE}
+forestFit <- train(classe ~ ., method = "rf", data = train1[, 7:59], prox = T, trControl = fitControl)
+forestPred <- predict(forestFit, newdata = train1[, 7:59])
+```
+
+For Random Forest, calculating accuracy by predicting on the training set is incorrect. A better measure of training accuracy is the OOB prediction error. Here, it is `r forestFit$OOB`.
+Accuracy on the cross-validation set is also excellent:
+
+```{r}
+forestCvPred <- predict(forestFit, newdata = cv1[, 7:59])
+sum(forestCvPred == cv1[, 59]) / length(forestCvPred)
+table(Actual = cv1[, 59], Prediction = forestCvPred)
+```
+
+The training time is quite long: `r round(forestFit$times / 60, 1)`.  
+
+However the more important measure for the designed application is prediction time, as the user expects near-instant feedback. From that perspective, we found that Naive-Bayes had the worst prediction time by far. Fortunately the Random Forest prediction time is quick (a few seconds).
+
+
+## 4.3 Random Forest on Principal Components
+Despite the discussion above, we would like to try to improve the training time of our algorithm. An obvious option is to use Principal Components Analysis to compress the data. We are also interested in sreing how different PCA thresholds (variance explained) will influence accuracy.
+
+The RF algorithm includes bootstrapping which theoretically reduces the need for a cross-validation set. However we want to study how different values of the threshold parameter in PCA influence accuracy. This means that we will to an extent tune our parameters to the cross-validation set. We therefore need an untouched test set to evaluate our model's final performance.
+
+We rely on the 'train' function to find the optimal number of tries for the Random Forest Algorithm, while we manually vary the PCA threshold (proportion of variance explained by the computed Principal Components)
+
+```{r}
+PCA.thresh <- c(0.95, 0.9, 0.8, 0.8, 0.5)
+
+accuraciesWithPCA <- function(t, outcome, model, trainData, cvData,
+                              control) {
+    results = list()
+    outcomeIdx <- outcome != colnames(trainData)
+    trainData.PCAselection <- trainData[ , outcomeIdx]
+    cvData.PCAselection <- cvData[ , outcomeIdx]
+    # Compute PCA with specified threshold:
+    pcaModel <- preProcess(trainData.PCAselection, 
+                           method = "pca", thresh = t)
+    # Training set recomputed using PCs:
+    trainPCA <- predict(pcaModel, trainData.PCAselection)
+    # Train specified classification model using the PC dataset:
+    modelFitPCA <- train(trainData[[outcome]] ~ ., method = model,
+                         data = trainPCA, trControl = control)
+    # Calculate predictions for the CV dataset based on those PCs:
+    cvDataPCA <- predict(pcaModel, cvData.PCAselection)
+    cvPredPCA <- predict(modelFitPCA, newdata = cvDataPCA)
+    results[1] <- sum(cvPredPCA == cvData[[outcome]]) / length(cvPredPCA)
+    results[2] <- modelFitPCA
+    return(results)
+}
+
+PCA.thresh = c(.75)
+rfAccuracies <- lapply(PCA.thresh, FUN = accuraciesWithPCA,
+                        outcome = "classe",
+                        model = "rf",
+                        trainData = train1[, 7:59],
+                        cvData = cv1[, 7:59],
+                        control = fitControl)
+```
+
+---
+
+### References
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13).   Stuttgart, Germany: ACM SIGCHI, 2013.  
+  
+Read more: http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz3xsGogIbK
