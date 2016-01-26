@@ -86,7 +86,7 @@ NAsByCol <- sapply(names(fullSet),
                            length(fullSet[, c])})
 ```
 
-```{r echo = FALSE, fig.cap="*Figure 2: Distribution of the proportion of NAs in each column*", include = TRUE}
+```{r echo = FALSE, fig.cap="*Figure 2: Distribution of the proportion of NAs in each column*", fig.height=4 ,include = TRUE}
 hist(NAsByCol, breaks = 50, col = "lightgrey", main = NULL)
 ```
 
@@ -96,10 +96,9 @@ We address this by setting a threshold at 50% and dropping any column containing
 thresh <- .50
 fullSetNoNAs<- fullSet[ , colSums(is.na(fullSet)) <= 
                             thresh * length(fullSet[[1]])]
-rm(fullSet)
-# Check how the number of NAs dropped:
+rm(fullSet)  # Housekeeping
+# Check how the number of NAs remaining:
 sum(is.na(fullSetNoNAs))
-sum(is.na(fullSetNoNAs)) / (ncol(fullSetNoNAs) * nrow(fullSetNoNAs))
 ```
 
 ```{r}
@@ -119,11 +118,11 @@ We have a large number of observations, therefore we can afford to partition the
 trainIndex <- createDataPartition(fullSetNoNAs$classe, 
                                   p = 0.6, list = F)
 train1 <- fullSetNoNAs[trainIndex, ]
-test1 <- fullSetNoNAs[-trainIndex, ]
-cvIndex <- createDataPartition(test1$classe, p = 0.5, list = F)
-cv1 <- test1[cvIndex, ]
-test1 <- test1[-cvIndex, ]
-rm(fullSetNoNAs)
+testAndCv1 <- fullSetNoNAs[-trainIndex, ]
+cvIndex <- createDataPartition(testAndCv1$classe, p = 0.5, list = F)
+cv1 <- testAndCv1[cvIndex, ]
+test1 <- testAndCv1[-cvIndex, ]
+rm(fullSetNoNAs)  # Housekeeping
 ```
 
 # 4. Model Fitting and Prediction
@@ -135,13 +134,14 @@ We tried several algorithms, starting with simple ones:
 * Naive Bayes
 * Random Forest
 
-The first three gave unsatisfactory prediction accuracy both on the training and cross-validation sets:
+The first three gave unsatisfactory prediction accuracy both on the training and cross-validation sets:  
 
-Model       | Accuracy on CV set
---------------------------------
-Tree        | 49.6%
-LDA         | 70.6%
-Naive-Bayes | 74.6%    
+
+Model        | Accuracy on CV set
+------------ | -------------------
+Tree         | 49.6%
+LDA          | 70.6%
+Naive Bayes  | 74.6%    
 
 We will now focus on the Random Forest algorithm, which yielded the best results by far.
 
@@ -151,34 +151,38 @@ We first deploy the Random Forest algorithm on the training set without prior tr
 ```{r message=FALSE, warning=FALSE, cache=TRUE, eval=TRUE}
 forestFit <- train(classe ~ ., method = "rf", data = train1[, 7:59],
                    prox = T, trControl = fitControl)
-forestPred <- predict(forestFit, newdata = train1[, 7:59])
 ```
 
-For Random Forest, calculating accuracy by predicting on the training set is incorrect. A better measure of training accuracy is the OOB prediction error. Here, it is `r forestFit$OOB`.
+For Random Forest, calculating accuracy by predicting on the training set is incorrect. A better measure of training accuracy is the OOB prediction error. Here, it is excellent as reported here:  
+
+```{r cache = TRUE, echo = FALSE}
+print(forestFit$finalModel)
+```
+
 Accuracy on the cross-validation set is also excellent:
 
 ```{r cache=TRUE}
-forestCvPred <- predict(forestFit, newdata = cv1[, 7:59])
+forestCvPred <- predict(forestFit, newdata = cv1)
 sum(forestCvPred == cv1[, 59]) / length(forestCvPred)
 table(Actual = cv1[, 59], Prediction = forestCvPred)
 ```
 
-The training time is quite long: `r round(forestFit$times / 60, 1)`.  
+The training time is quite long: `r round(forestFit$times$everything[3] / 60, 1)` minutes.  
 
 However the more important measure for the designed application is prediction time, as the user expects near-instant feedback. From that perspective, we found that Naive-Bayes had the worst prediction time by far. Fortunately the Random Forest prediction time is quick (a few seconds).
 
 
 ## 4.3 Random Forest on Principal Components
-Despite the discussion above, we would like to try to improve the training time of our algorithm. An obvious option is to use Principal Components Analysis to compress the data. We are also interested in sreing how different PCA thresholds (variance explained) will influence accuracy.
+An interesting question for datasets with a relatively large numbers of variables is how much accuracy we lose in relation to data compression levels. The method used here is Principal Component Analysis and we will assess accuracy over a range of different values for the threshold parameter (levels of variance explained by the principal components).
 
-The RF algorithm includes bootstrapping which theoretically reduces the need for a cross-validation set. However we want to study how different values of the threshold parameter in PCA influence accuracy. This means that we will to an extent tune our parameters to the cross-validation set. We therefore need an untouched test set to evaluate our model's final performance.
+The RF algorithm includes bootstrapping which theoretically reduces the need for a cross-validation set. However we are going to evaluate the model against different threshold values, which means that to a certain extent, we will tune our parameters to the cross-validation set. We therefore need an untouched test set to evaluate our model's final performance.
 
 We rely on the 'train' function to find the optimal number of tries for the Random Forest Algorithm, while we manually vary the PCA threshold (proportion of variance explained by the computed Principal Components)
 
-```{r cache=TRUE}
-PCA.thresh <- c(0.95, 0.9, 0.8, 0.8, 0.5)
+```{r cache=TRUE, warning=FALSE}
+PCA.thresh <- c(0.95, 0.9, 0.8, 0.7, 0.5)
 
-accuraciesWithPCA <- function(t, outcome, model, trainData, cvData,
+rfResultsWithPCA <- function(t, outcome, model, trainData, cvData,
                               control) {
     results = list()
     outcomeIdx <- outcome != colnames(trainData)
@@ -190,19 +194,20 @@ accuraciesWithPCA <- function(t, outcome, model, trainData, cvData,
     # Training set recomputed using PCs:
     trainPCA <- predict(pcaModel, trainData.PCAselection)
     # Train specified classification model using the PC dataset:
-    modelFitPCA <- train(trainData[[outcome]] ~ ., method = model,
+    modelFitPCA <- train(trainData[[outcome]] ~ . , method = model,
                          data = trainPCA, trControl = control)
     # Calculate predictions for the CV dataset based on those PCs:
     cvDataPCA <- predict(pcaModel, cvData.PCAselection)
     cvPredPCA <- predict(modelFitPCA, newdata = cvDataPCA)
-    results[1] <- sum(cvPredPCA == cvData[[outcome]]) 
-                    / length(cvPredPCA)
-    results[2] <- modelFitPCA
+    results$accuracy <- sum(cvPredPCA == 
+                                cvData[[outcome]])/length(cvPredPCA)
+    results$fitObj <- modelFitPCA
+    results$pcaObj <- pcaModel
+
     return(results)
 }
 
-PCA.thresh = c(.75)
-rfAccuracies <- lapply(PCA.thresh, FUN = accuraciesWithPCA,
+rfModels <- lapply(PCA.thresh, FUN = rfResultsWithPCA,
                         outcome = "classe",
                         model = "rf",
                         trainData = train1[, 7:59],
@@ -210,9 +215,90 @@ rfAccuracies <- lapply(PCA.thresh, FUN = accuraciesWithPCA,
                         control = fitControl)
 ```
 
+```{r echo=FALSE, eval=FALSE}
+save(forestFit, rfModels, file="variables.Rda")
+```
+
+
+We can plot accuracy vs running time:
+
+```{r, warning=FALSE, message=FALSE}
+
+accuracy <- numeric()
+runtime <- numeric()
+
+for (i in seq(1, length(PCA.thresh))){
+    accuracy[i] <- rfModels[[i]]$accuracy
+    runtime[i] <- rfModels[[i]]$fitObj$times$everything[3]
+}
+print(round(runtime))
+print(round(accuracy, 3))
+
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.cap="*Figure 3: Accuacy vs. Runtime and PCA threshold values*"}
+g <- qplot(x = runtime, y = accuracy, label = PCA.thresh)
+g <- g + geom_point() + geom_line() + geom_text(nudge_y = -0.005)
+g
+```
+
+It turns out that even at 50% variance retained in the PCA process, we already get 83% accuracy and the algorithm runs in 3.5 minutes. At 95% variance retained, the running time triples but accuracy is 97%. The sweet spot seems to be somewhere around 85-90% variance retained. In the remainder of this document, we will use a threshold of 90% but if we were very concerned with running times, 70% would be a perfectly viable choice.
+
+#5. Performance assessment
+
+Using our model including PCA (at 90% threshold) + Random Forest, we can run predictions on the test set, which we have not used so far:
+
+```{r warning=FALSE, message=FALSE}
+# Apply PCA to the test set:
+testDataPCA <- predict(rfModels[[2]]$pcaObj, newdata = test1)
+forestTestPred <- predict(rfModels[[2]]$fitObj, newdata = testDataPCA)
+#Accuracy:
+sum(forestTestPred == test1$classe) / nrow(test1)
+table(Actual = test1$classe, Prediction = forestTestPred)
+```
+
+The prediction accuracy remains extremely satisfactory on the test set.
+
+#6. Assignment quiz cases
+
+The Coursera assignment includes 20 test cases that are used to assess the model performance.
+
+```{r}
+quizSetRaw <- read.csv("data/pml-testing.csv",
+                    na.strings = c("", "NA", "#DIV/0!"))
+# Some variables improperly loaded as factors or integer vectors:
+colSelect <- select(quizSetRaw, -(X : cvtd_timestamp), -new_window,
+                    -num_window)
+for (c in names(colSelect)) {
+    colSelect[, c] <- as.numeric(colSelect[, c])
+}
+# We get rid of the problematic and incomplete cvtd_timestamp variable
+# and reconstruct our data set:
+quizSet <- data.frame(select(quizSetRaw, (X : raw_timestamp_part_2),
+                             new_window, num_window), colSelect)
+
+# Apply PCA to the test set:
+quizSetPCA <- predict(rfModels[[2]]$pcaObj, newdata = quizSet)
+# Calculate predictions:
+forestQuizPred <- predict(rfModels[[2]]$fitObj, newdata = quizSetPCA)
+forestQuizPred
+```
+
+19 out of 20 predictions turned out to be correct (only #3 was incorrectly predicted as A).
+
+Note: the "no-PCA" Random Forest algorithm finds all 20 cases correctly:
+```{r}
+forestQuizNoPCA <- predict(forestFit, newdata = quizSet)
+forestQuizNoPCA
+```
+
+#Conclusions
+
+This assignment demonstrated the predictive power of the Random Forest algorithm on high-dimensional data. The trade-off is fairly long computational times but this can be largely mitigated by operating dimensionality reduction during the pre-processing phase while retaining high levels of accuracy.
+
 ---
 
 ### References
 Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13).   Stuttgart, Germany: ACM SIGCHI, 2013.  
   
-Read more: http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz3xsGogIbK
+Read more: [http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz3xsGogIbK]
