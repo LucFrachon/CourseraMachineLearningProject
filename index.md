@@ -1,12 +1,6 @@
---- 
-title: 'Practical Machine Learning Project: Human Activity Qualification'
-author: "Luc Frachon"
-date: "21 janvier 2016"
-output: 
-  html_document: 
-    keep_md: yes
-    fig_caption: yes
----
+# Practical Machine Learning Project: Human Activity Qualification
+Luc Frachon  
+21 janvier 2016  
 
 # Abstract
 
@@ -28,47 +22,18 @@ This analysis was performed using the following set up:
 
 In this analysis we use the following libraries: caret, ggplot2, dplyr, parallel and doParallel. These last two enable us to take advantage of the quad-core configuration to speed up calculations. We also set the randomiser seed to 2302.
 
-```{r echo=FALSE, warning=FALSE, message=FALSE}
-require(caret); require(ggplot2); require(dplyr); require(reshape2); require(rpart)
 
-#Increase memory allocation and set up parallel computing:
-memory.limit(16194)
-library(parallel)
-library(doParallel)
-cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
-registerDoParallel(cluster)
-fitControl <- trainControl(allowParallel = TRUE)
-set.seed(2302)
+```
+## [1] 16194
 ```
 
 As usual, we read the data and tidy it up to make it easier to use.
-```{r echo=FALSE, warning=FALSE, message=FALSE}
-rawData <- read.csv("data/pml-training.csv",
-                    na.strings = c("", "NA", "#DIV/0!"))
-# Some variables improperly loaded as factors or integer vectors:
-colSelect <- select(rawData, -(X : cvtd_timestamp), -new_window,
-                    -num_window, -classe)
-for (c in names(colSelect)) {
-    colSelect[, c] <- as.numeric(colSelect[, c])
-}
-# We get rid of the problematic and incomplete cvtd_timestamp variable
-# and reconstruct our data set:
-fullSet <- data.frame(select(rawData, (X : raw_timestamp_part_2),
-                             new_window, num_window), colSelect, 
-                      classe = as.factor(rawData$classe))
-rm(rawData)
-rm(colSelect)
-```
+
 
 The data comes is kindly made available from the team cited in References. It contains 19622 observations and 160 variables, 153 of which can be considered potential predictors. The outcome is 'classe', a categorical variable with 5 classes; A corresponds to correctly executed movement whereas B through E denote specific errors in execution.  
 Exploratory analysis shows that the dataset is ordered by 'classe', then 'user_name', then 'num_window', then timestamps (*figure 1*). 
 
-```{r echo= FALSE, fig.cap="*Figure 1: Structure of the raw dataset. Different colours indicate different human users.*", include=TRUE}
-plot(fullSet$X, fullSet$num_window, 
-     pch = as.character(fullSet$classe), 
-     col = fullSet$user_name, xlab = "Row index", 
-     ylab = "num_window")
-```
+![*Figure 1: Structure of the raw dataset. Different colours indicate different human users.*](index_files/figure-html/unnamed-chunk-3-1.png) 
 
 
 The timestamps correspond to  2.5s intervals with a 0.5s overlap. Presumably, each window corresponds to one instance of weight lifting. We considered the possibility of grouping observations within each window and using aggregated statistics as predictors. Although this approach might have made training and prediction easier, we decided against it for three reasons:
@@ -80,19 +45,14 @@ The timestamps correspond to  2.5s intervals with a 0.5s overlap. Presumably, ea
 # 2. Pre-processing
 
 The data contains many sparse columns; it is really an "all-or-nothing" situation: the majority of columns are empty or near-empty.
-```{r echo = FALSE}
-NAsByCol <- sapply(names(fullSet), 
-                   function(c){sum(is.na(fullSet[, c])) /
-                           length(fullSet[, c])})
-```
 
-```{r echo = FALSE, fig.cap="*Figure 2: Distribution of the proportion of NAs in each column*", fig.height=4 ,include = TRUE}
-hist(NAsByCol, breaks = 50, col = "lightgrey", main = NULL)
-```
+
+![*Figure 2: Distribution of the proportion of NAs in each column*](index_files/figure-html/unnamed-chunk-5-1.png) 
 
 We address this by setting a threshold at 50% and dropping any column containing more than NAs the threshold. This effectively drops all the NAs. There are no other zero- or near-zero variance predictors.
 
-```{r}
+
+```r
 thresh <- .50
 fullSetNoNAs<- fullSet[ , colSums(is.na(fullSet)) <= 
                             thresh * length(fullSet[[1]])]
@@ -101,9 +61,18 @@ rm(fullSet)  # Housekeeping
 sum(is.na(fullSetNoNAs))
 ```
 
-```{r}
+```
+## [1] 0
+```
+
+
+```r
 # There are no other zero or near-zero variance predictors:
 nearZeroVar(fullSetNoNAs[ , 7 : 58], freqCut = 95/5, saveMetrics = FALSE)
+```
+
+```
+## integer(0)
 ```
 
 # 3. Data Partitioning
@@ -114,7 +83,8 @@ We have a large number of observations, therefore we can afford to partition the
 * Cross-validation set (20%), which we will use to select and tune the best algorithm
 * Test set (20%), on which to estimate the model's quality. A small sample of 20 test cases is also provided by Coursera, but that number is too small for a reliable assessment.
 
-```{r}
+
+```r
 trainIndex <- createDataPartition(fullSetNoNAs$classe, 
                                   p = 0.6, list = F)
 train1 <- fullSetNoNAs[trainIndex, ]
@@ -148,28 +118,62 @@ We will now focus on the Random Forest algorithm, which yielded the best results
 ## 4.2. Random Forest on untransformed data
 We first deploy the Random Forest algorithm on the training set without prior transformation, using the 'caret' package:
 
-```{r message=FALSE, warning=FALSE, cache=TRUE, eval=TRUE}
+
+```r
 forestFit <- train(classe ~ ., method = "rf", data = train1[, 7:59],
                    prox = T, trControl = fitControl)
 ```
 
 For Random Forest, calculating accuracy by predicting on the training set is incorrect. A better measure of training accuracy is the OOB prediction error. Here, it is excellent as reported here:  
 
-```{r cache = TRUE, echo = FALSE}
-print(forestFit$finalModel)
+
+```
+## 
+## Call:
+##  randomForest(x = x, y = y, mtry = param$mtry, proximity = ..1) 
+##                Type of random forest: classification
+##                      Number of trees: 500
+## No. of variables tried at each split: 27
+## 
+##         OOB estimate of  error rate: 0.77%
+## Confusion matrix:
+##      A    B    C    D    E class.error
+## A 3340    6    0    0    2 0.002389486
+## B   15 2252   10    2    0 0.011847301
+## C    0    8 2037    9    0 0.008276534
+## D    0    0   25 1904    1 0.013471503
+## E    0    1    3    9 2152 0.006004619
 ```
 
 Accuracy on the cross-validation set is also excellent:
 
-```{r cache=TRUE}
+
+```r
 forestCvPred <- predict(forestFit, newdata = cv1)
 sum(forestCvPred == cv1[, 59]) / length(forestCvPred)
+```
+
+```
+## [1] 0.9923528
+```
+
+```r
 table(Actual = cv1[, 59], Prediction = forestCvPred)
 ```
 
-Out-of-bag error is 1 - accuracy, therefore `r 1 - sum(forestCvPred == cv1[, 59]) / length(forestCvPred)`.  
+```
+##       Prediction
+## Actual    A    B    C    D    E
+##      A 1115    0    1    0    0
+##      B    6  750    2    1    0
+##      C    0    8  673    3    0
+##      D    0    0    4  639    0
+##      E    0    0    1    4  716
+```
 
-The training time is quite long: `r round(forestFit$times$everything[3] / 60, 1)` minutes. However the more important measure for the designed application is prediction time, as the user expects near-instant feedback. From that perspective, we found that Naive-Bayes had the worst prediction time by far. Fortunately the Random Forest prediction time is quick (a few seconds).
+Out-of-bag error is 1 - accuracy, therefore 0.0076472.  
+
+The training time is quite long: 100.9 minutes. However the more important measure for the designed application is prediction time, as the user expects near-instant feedback. From that perspective, we found that Naive-Bayes had the worst prediction time by far. Fortunately the Random Forest prediction time is quick (a few seconds).
 
 
 ## 4.3 Random Forest on Principal Components
@@ -179,7 +183,8 @@ The RF algorithm includes bootstrapping which theoretically reduces the need for
 
 We rely on the 'train' function to find the optimal number of tries for the Random Forest Algorithm, while we manually vary the PCA threshold (proportion of variance explained by the computed Principal Components)
 
-```{r cache=TRUE, warning=FALSE}
+
+```r
 PCA.thresh <- c(0.95, 0.9, 0.8, 0.7, 0.5)
 
 rfResultsWithPCA <- function(t, outcome, model, trainData, cvData,
@@ -215,15 +220,13 @@ rfModels <- lapply(PCA.thresh, FUN = rfResultsWithPCA,
                         control = fitControl)
 ```
 
-```{r echo=FALSE, eval=FALSE}
-save(forestFit, rfModels, file="variables.Rda")
-```
+
 
 
 We can plot accuracy vs running time:
 
-```{r, warning=FALSE, message=FALSE}
 
+```r
 accuracy <- numeric()
 runtime <- numeric()
 
@@ -232,15 +235,21 @@ for (i in seq(1, length(PCA.thresh))){
     runtime[i] <- rfModels[[i]]$fitObj$times$everything[3]
 }
 print(round(runtime))
+```
+
+```
+## [1] 643 479 332 248 200
+```
+
+```r
 print(round(accuracy, 3))
-
 ```
 
-```{r echo=FALSE, warning=FALSE, message=FALSE, fig.cap="*Figure 3: Accuacy vs. Runtime and PCA threshold values*"}
-g <- qplot(x = runtime, y = accuracy, label = PCA.thresh)
-g <- g + geom_point() + geom_line() + geom_text(nudge_y = -0.005)
-g
 ```
+## [1] 0.970 0.964 0.951 0.931 0.831
+```
+
+![*Figure 3: Accuacy vs. Runtime and PCA threshold values*](index_files/figure-html/unnamed-chunk-15-1.png) 
 
 It turns out that even at 50% variance retained in the PCA process, we already get 83% accuracy and the algorithm runs in 3.5 minutes. At 95% variance retained, the running time triples but accuracy is 97%. The sweet spot seems to be somewhere around 85-90% variance retained. In the remainder of this document, we will use a threshold of 90% but if we were very concerned with running times, 70% would be a perfectly viable choice.
 
@@ -248,22 +257,41 @@ It turns out that even at 50% variance retained in the PCA process, we already g
 
 Using our model including PCA (at 90% threshold) + Random Forest, we can run predictions on the test set, which we have not used so far:
 
-```{r warning=FALSE, message=FALSE}
+
+```r
 # Apply PCA to the test set:
 testDataPCA <- predict(rfModels[[2]]$pcaObj, newdata = test1)
 forestTestPred <- predict(rfModels[[2]]$fitObj, newdata = testDataPCA)
 #Accuracy:
 sum(forestTestPred == test1$classe) / nrow(test1)
+```
+
+```
+## [1] 0.964313
+```
+
+```r
 table(Actual = test1$classe, Prediction = forestTestPred)
 ```
 
-The prediction accuracy remains extremely satisfactory on the test set. Out-of-sample error is 1 - accuracy, therefore `r 1 - sum(forestTestPred == test1$classe) / nrow(test1)`.
+```
+##       Prediction
+## Actual    A    B    C    D    E
+##      A 1092    6    6    9    3
+##      B   20  711   24    0    4
+##      C    4    8  665    7    0
+##      D    0    0   31  611    1
+##      E    0    4    9    4  704
+```
+
+The prediction accuracy remains extremely satisfactory on the test set. Out-of-sample error is 1 - accuracy, therefore 0.035687.
 
 #6. Assignment quiz cases
 
 The Coursera assignment includes 20 test cases that are used to assess the model performance.
 
-```{r}
+
+```r
 quizSetRaw <- read.csv("data/pml-testing.csv",
                     na.strings = c("", "NA", "#DIV/0!"))
 # Some variables improperly loaded as factors or integer vectors:
@@ -284,12 +312,23 @@ forestQuizPred <- predict(rfModels[[2]]$fitObj, newdata = quizSetPCA)
 forestQuizPred
 ```
 
+```
+##  [1] B A A A A E D B A A B C B A E E A B B B
+## Levels: A B C D E
+```
+
 19 out of 20 predictions turned out to be correct (only #3 was incorrectly predicted as A).
 
 Note: the "no-PCA" Random Forest algorithm finds all 20 cases correctly:
-```{r}
+
+```r
 forestQuizNoPCA <- predict(forestFit, newdata = quizSet)
 forestQuizNoPCA
+```
+
+```
+##  [1] B A B A A E D B A A B C B A E E A B B B
+## Levels: A B C D E
 ```
 
 #Conclusions

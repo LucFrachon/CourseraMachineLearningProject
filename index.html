@@ -200,8 +200,8 @@ sum(forestCvPred == cv1[, 59]) / length(forestCvPred)</code></pre>
 ##      C    0    8  673    3    0
 ##      D    0    0    4  639    0
 ##      E    0    0    1    4  716</code></pre>
-<p>The training time is quite long: 100.9 minutes.</p>
-<p>However the more important measure for the designed application is prediction time, as the user expects near-instant feedback. From that perspective, we found that Naive-Bayes had the worst prediction time by far. Fortunately the Random Forest prediction time is quick (a few seconds).</p>
+<p>Out-of-bag error is 1 - accuracy, therefore 0.0076472.</p>
+<p>The training time is quite long: 100.9 minutes. However the more important measure for the designed application is prediction time, as the user expects near-instant feedback. From that perspective, we found that Naive-Bayes had the worst prediction time by far. Fortunately the Random Forest prediction time is quick (a few seconds).</p>
 </div>
 <div id="random-forest-on-principal-components" class="section level2">
 <h2>4.3 Random Forest on Principal Components</h2>
@@ -276,7 +276,7 @@ sum(forestTestPred == test1$classe) / nrow(test1)</code></pre>
 ##      C    4    8  665    7    0
 ##      D    0    0   31  611    1
 ##      E    0    4    9    4  704</code></pre>
-<p>The prediction accuracy remains extremely satisfactory on the test set.</p>
+<p>The prediction accuracy remains extremely satisfactory on the test set. Out-of-sample error is 1 - accuracy, therefore 0.035687.</p>
 </div>
 <div id="assignment-quiz-cases" class="section level1">
 <h1>6. Assignment quiz cases</h1>
